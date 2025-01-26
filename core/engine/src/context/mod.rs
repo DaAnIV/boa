@@ -14,6 +14,7 @@ use intrinsics::Intrinsics;
 #[cfg(feature = "temporal")]
 use temporal_rs::tzdb::FsTzdbProvider;
 
+use crate::class::{DynamicClassBuilder, DynamicClassData};
 use crate::job::Job;
 use crate::vm::RuntimeLimits;
 use crate::{
@@ -616,6 +617,109 @@ impl Context {
     #[must_use]
     pub fn get_data<T: NativeObject>(&self) -> Option<&T> {
         self.data.get::<T>()
+    }
+
+    /// Registers a global class `C` in the currently active realm.
+    ///
+    /// Errors if the class has already been registered.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[derive(Debug, Trace, Finalize)]
+    /// struct MyClass;
+    ///
+    /// impl Class for MyClass {
+    ///    // ...
+    /// }
+    ///
+    /// context.register_global_class::<MyClass>()?;
+    /// ```
+    pub fn register_global_dynamic_class<B, D>(&mut self, builder: &B) -> JsResult<()>
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        if self.realm().has_dynamic_class(builder) {
+            return Err(JsNativeError::typ()
+                .with_message("cannot register a class twice")
+                .into());
+        }
+
+        let mut class_builder = ClassBuilder::new_dynamic(self, builder.clone());
+        builder.init(&mut class_builder)?;
+
+        let class = class_builder.build();
+        let property = PropertyDescriptor::builder()
+            .value(class.constructor())
+            .writable(builder.attributes().writable())
+            .enumerable(builder.attributes().enumerable())
+            .configurable(builder.attributes().configurable());
+
+        self.global_object().define_property_or_throw(
+            js_string!(builder.name()),
+            property,
+            self,
+        )?;
+        self.realm().register_dynamic_class(builder, class);
+
+        Ok(())
+    }
+
+    /// Removes the global class `C` from the currently active realm, returning the constructor
+    /// and prototype of the class if `C` was registered.
+    ///
+    /// # Note
+    ///
+    /// This makes the constructor return an error on further calls, but note that this won't protect
+    /// static properties from being accessed within variables that stored the constructor before being
+    /// unregistered.  If you need that functionality, you can use a static accessor that first checks
+    /// if the class is registered ([`Context::has_global_class`]) before returning the static value.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[derive(Debug, Trace, Finalize)]
+    /// struct MyClass;
+    ///
+    /// impl Class for MyClass {
+    ///    // ...
+    /// }
+    ///
+    /// context.register_global_class::<MyClass>()?;
+    /// // ... code
+    /// context.unregister_global_class::<MyClass>()?;
+    /// ```
+    pub fn unregister_global_dynamic_class<B, D>(
+        &mut self,
+        builder: &B,
+    ) -> JsResult<Option<StandardConstructor>>
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.global_object()
+            .delete_property_or_throw(js_string!(builder.name()), self)?;
+        Ok(self.realm().unregister_dynamic_class(builder))
+    }
+
+    /// Checks if the currently active realm has the global class `C` registered.
+    #[must_use]
+    pub fn has_global_dynamic_class<B, D>(&self, builder: &B) -> bool
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.realm().has_dynamic_class(builder)
+    }
+
+    /// Gets the constructor and prototype of the global class `C` if the currently active realm has
+    /// that class registered.
+    #[must_use]
+    pub fn get_global_dynamic_class<B, D>(&self, builder: &B) -> Option<StandardConstructor>
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.realm().get_dynamic_class(builder)
     }
 }
 

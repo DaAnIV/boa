@@ -12,7 +12,7 @@ use boa_ast::scope::Scope;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    class::Class,
+    class::{Class, DynamicClassBuilder, DynamicClassData},
     context::{
         intrinsics::{Intrinsics, StandardConstructor},
         HostHooks,
@@ -70,6 +70,7 @@ struct Inner {
     template_map: GcRefCell<FxHashMap<u64, JsObject>>,
     loaded_modules: GcRefCell<FxHashMap<JsString, Module>>,
     host_classes: GcRefCell<FxHashMap<TypeId, StandardConstructor>>,
+    host_dynamic_classes: GcRefCell<FxHashMap<(TypeId, u64), StandardConstructor>>,
 
     host_defined: GcRefCell<HostDefined>,
 }
@@ -101,6 +102,7 @@ impl Realm {
                 template_map: GcRefCell::default(),
                 loaded_modules: GcRefCell::default(),
                 host_classes: GcRefCell::default(),
+                host_dynamic_classes: GcRefCell::default(),
                 host_defined: GcRefCell::default(),
             }),
         };
@@ -227,5 +229,54 @@ impl Realm {
     pub(crate) fn addr(&self) -> *const () {
         let ptr: *const _ = &*self.inner;
         ptr.cast()
+    }
+
+    /// Checks if this `Realm` has the class `C` registered into its class map.
+    #[must_use]
+    pub fn has_dynamic_class<B, D>(&self, builder: &B) -> bool
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.inner
+            .host_dynamic_classes
+            .borrow()
+            .contains_key(&(TypeId::of::<B>(), builder.id()))
+    }
+
+    /// Gets the constructor and prototype of the class `C` if it is registered in the class map.
+    #[must_use]
+    pub fn get_dynamic_class<B, D>(&self, builder: &B) -> Option<StandardConstructor>
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.inner
+            .host_dynamic_classes
+            .borrow()
+            .get(&(TypeId::of::<B>(), builder.id()))
+            .cloned()
+    }
+
+    pub(crate) fn register_dynamic_class<B, D>(&self, builder: &B, spec: StandardConstructor)
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.inner
+            .host_dynamic_classes
+            .borrow_mut()
+            .insert((TypeId::of::<B>(), builder.id()), spec);
+    }
+
+    pub(crate) fn unregister_dynamic_class<B, D>(&self, builder: &B) -> Option<StandardConstructor>
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        self.inner
+            .host_dynamic_classes
+            .borrow_mut()
+            .remove(&(TypeId::of::<B>(), builder.id()))
     }
 }

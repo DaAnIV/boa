@@ -237,6 +237,146 @@ pub trait Class: NativeObject + Sized {
     }
 }
 
+/// The data that a dynamic class builder holds.
+///
+/// See the [module-level documentation][self] for more details.
+pub trait DynamicClassData: NativeObject + Sized {}
+
+/// A dynamic class builder.
+///
+/// See the [module-level documentation][self] for more details.
+pub trait DynamicClassBuilder<Data: DynamicClassData>: Clone + 'static {
+    /// The binding name of this class.
+    fn name(&self) -> &str;
+    /// The amount of arguments this class' constructor takes. Default is `0`.
+    fn length(&self) -> usize {
+        0
+    }
+    /// The property attributes of this class' constructor in the global object.
+    /// Default is `writable`, `enumerable`, `configurable`.
+    fn attributes(&self) -> Attribute {
+        Attribute::all()
+    }
+
+    /// A unique id for this specific builder.
+    fn id(&self) -> u64;
+
+    /// Initializes the properties and methods of this class.
+    fn init(&self, class: &mut ClassBuilder<'_>) -> JsResult<()>;
+
+    /// Creates the internal data for an instance of this class.
+    fn data_constructor(
+        &self,
+        new_target: &JsValue,
+        args: &[JsValue],
+        context: &mut Context,
+    ) -> JsResult<Data>;
+
+    /// Initializes the properties of the constructed object for an instance of this class.
+    ///
+    /// Useful to initialize additional properties for the constructed object that aren't
+    /// stored inside the native data.
+    #[allow(unused_variables)] // Saves work when IDEs autocomplete trait impls.
+    fn object_constructor(
+        &self,
+        instance: &JsObject,
+        args: &[JsValue],
+        context: &mut Context,
+    ) -> JsResult<()> {
+        Ok(())
+    }
+
+    /// Creates a new [`JsObject`] with its internal data set to the result of calling
+    /// [`Class::data_constructor`] and [`Class::object_constructor`].
+    ///
+    /// # Errors
+    ///
+    /// - Throws an error if `new_target` is undefined.
+    /// - Throws an error if this class is not registered in `new_target`'s realm.
+    ///   See [`Context::register_global_class`].
+    ///
+    /// <div class="warning">
+    /// Overriding this method could be useful for certain usages, but incorrectly implementing this
+    /// could lead to weird errors like missing inherited methods or incorrect internal data.
+    /// </div>
+    fn construct(
+        &self,
+        new_target: &JsValue,
+        args: &[JsValue],
+        context: &mut Context,
+    ) -> JsResult<JsObject> {
+        if new_target.is_undefined() {
+            return Err(JsNativeError::typ()
+                .with_message(format!(
+                    "cannot call constructor of native class `{}` without new",
+                    self.name()
+                ))
+                .into());
+        }
+
+        let prototype = 'proto: {
+            let realm = if let Some(constructor) = new_target.as_object() {
+                if let Some(proto) = constructor.get(PROTOTYPE, context)?.as_object() {
+                    break 'proto proto.clone();
+                }
+                constructor.get_function_realm(context)?
+            } else {
+                context.realm().clone()
+            };
+            realm
+                .get_dynamic_class(self)
+                .ok_or_else(|| {
+                    JsNativeError::typ().with_message(format!(
+                        "could not find native class `{}` in the map of registered classes",
+                        self.name()
+                    ))
+                })?
+                .prototype()
+        };
+
+        let data = self.data_constructor(new_target, args, context)?;
+
+        let object =
+            JsObject::from_proto_and_data_with_shared_shape(context.root_shape(), prototype, data);
+
+        self.object_constructor(&object, args, context)?;
+
+        Ok(object)
+    }
+
+    /// Constructs an instance of this class from its inner native data.
+    ///
+    /// Note that the default implementation won't call [`Class::data_constructor`], but it will
+    /// call [`Class::object_constructor`] with no arguments.
+    ///
+    /// # Errors
+    /// - Throws an error if this class is not registered in the context's realm. See
+    ///   [`Context::register_global_class`].
+    ///
+    /// <div class="warning">
+    /// Overriding this method could be useful for certain usages, but incorrectly implementing this
+    /// could lead to weird errors like missing inherited methods or incorrect internal data.
+    /// </div>
+    fn from_data(&self, data: Data, context: &mut Context) -> JsResult<JsObject> {
+        let prototype = context
+            .get_global_dynamic_class(self)
+            .ok_or_else(|| {
+                JsNativeError::typ().with_message(format!(
+                    "could not find native class `{}` in the map of registered classes",
+                    self.name()
+                ))
+            })?
+            .prototype();
+
+        let object =
+            JsObject::from_proto_and_data_with_shared_shape(context.root_shape(), prototype, data);
+
+        self.object_constructor(&object, &[], context)?;
+
+        Ok(object)
+    }
+}
+
 /// Class builder which allows adding methods and static methods to the class.
 #[derive(Debug)]
 pub struct ClassBuilder<'ctx> {
@@ -254,6 +394,26 @@ impl<'ctx> ClassBuilder<'ctx> {
         );
         builder.name(T::NAME);
         builder.length(T::LENGTH);
+        Self { builder }
+    }
+
+    pub(crate) fn new_dynamic<B, D>(context: &'ctx mut Context, dynamic_class_builder: B) -> Self
+    where
+        D: DynamicClassData,
+        B: DynamicClassBuilder<D>,
+    {
+        let name = dynamic_class_builder.name().to_owned();
+        let length = dynamic_class_builder.length();
+
+        let constructor = unsafe {
+            NativeFunction::from_closure(move |t, a, c| {
+                dynamic_class_builder.construct(t, a, c).map(JsValue::from)
+            })
+        };
+
+        let mut builder = ConstructorBuilder::new(context, constructor);
+        builder.name(name);
+        builder.length(length);
         Self { builder }
     }
 

@@ -170,6 +170,13 @@ impl JsValue {
         Self::from_inner(InnerValue::Float64(rational))
     }
 
+    /// Creates a new boolean from a bool.
+    #[inline]
+    #[must_use]
+    pub const fn boolean(b: bool) -> Self {
+        Self::from_inner(InnerValue::Boolean(b))
+    }
+
     /// Returns true if the value is an object.
     #[inline]
     #[must_use]
