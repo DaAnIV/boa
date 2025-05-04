@@ -542,6 +542,14 @@ impl BindingEscapeAnalyzer<'_> {
         std::mem::swap(&mut self.scope, &mut scope);
         self.visit_function_body_mut(body)?;
         std::mem::swap(&mut self.scope, &mut scope);
+        if scopes.arguments_object_accessed() && scopes.mapped_arguments_object {
+            let parameter_names = bound_names(parameters);
+            for name in parameter_names {
+                scopes
+                    .parameter_scope()
+                    .access_binding(&name.to_js_string(self.interner), true);
+            }
+        }
         scopes.reorder_binding_indices();
         self.direct_eval = direct_eval_old;
         ControlFlow::Continue(())
@@ -1797,6 +1805,7 @@ fn function_declaration_instantiation(
         parameters_eval_scope: None,
         parameters_scope: None,
         lexical_scope: None,
+        mapped_arguments_object: false,
     };
 
     // 1. Let calleeContext be the running execution context.
@@ -1932,7 +1941,7 @@ fn function_declaration_instantiation(
             // Because we do not track (yet) if the mapped arguments object escapes the function,
             // we have to assume that the binding might escape trough the arguments object.
             if arguments_object_needed && !strict && formals.is_simple() {
-                env.access_binding(&param_name, true);
+                scopes.mapped_arguments_object = true;
             }
 
             // Note: These steps are not necessary in our implementation.
@@ -2150,30 +2159,26 @@ fn module_instantiation(module: &Module, env: &Scope, interner: &Interner) {
                     let name = name.to_js_string(interner);
                     drop(env.create_mutable_binding(name, false));
                 }
-                continue;
             }
             LexicallyScopedDeclaration::LexicalDeclaration(LexicalDeclaration::Const(c)) => {
                 for name in bound_names(c) {
                     let name = name.to_js_string(interner);
                     env.create_immutable_binding(name, true);
                 }
-                continue;
             }
             LexicallyScopedDeclaration::LexicalDeclaration(LexicalDeclaration::Let(l)) => {
                 for name in bound_names(l) {
                     let name = name.to_js_string(interner);
                     drop(env.create_mutable_binding(name, false));
                 }
-                continue;
             }
             LexicallyScopedDeclaration::AssignmentExpression(expr) => {
                 for name in bound_names(expr) {
                     let name = name.to_js_string(interner);
                     drop(env.create_mutable_binding(name, false));
                 }
-                continue;
             }
-        };
+        }
     }
 }
 

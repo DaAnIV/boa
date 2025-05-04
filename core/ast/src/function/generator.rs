@@ -6,10 +6,10 @@ use crate::{
     operations::{contains, ContainsSymbol},
     scope::{FunctionScopes, Scope},
     visitor::{VisitWith, Visitor, VisitorMut},
-    Declaration,
+    Declaration, LinearSpan, LinearSpanIgnoreEq,
 };
 use boa_interner::{Interner, ToIndentedString};
-use core::ops::ControlFlow;
+use core::{fmt::Write as _, ops::ControlFlow};
 
 /// A generator declaration.
 ///
@@ -30,13 +30,19 @@ pub struct GeneratorDeclaration {
 
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) scopes: FunctionScopes,
+    linear_span: LinearSpanIgnoreEq,
 }
 
 impl GeneratorDeclaration {
     /// Creates a new generator declaration.
     #[inline]
     #[must_use]
-    pub fn new(name: Identifier, parameters: FormalParameterList, body: FunctionBody) -> Self {
+    pub fn new(
+        name: Identifier,
+        parameters: FormalParameterList,
+        body: FunctionBody,
+        linear_span: LinearSpan,
+    ) -> Self {
         let contains_direct_eval = contains(&parameters, ContainsSymbol::DirectEval)
             || contains(&body, ContainsSymbol::DirectEval);
         Self {
@@ -45,6 +51,7 @@ impl GeneratorDeclaration {
             body,
             contains_direct_eval,
             scopes: FunctionScopes::default(),
+            linear_span: linear_span.into(),
         }
     }
 
@@ -74,6 +81,13 @@ impl GeneratorDeclaration {
     #[must_use]
     pub const fn scopes(&self) -> &FunctionScopes {
         &self.scopes
+    }
+
+    /// Gets linear span of the function declaration.
+    #[inline]
+    #[must_use]
+    pub const fn linear_span(&self) -> LinearSpan {
+        self.linear_span.0
     }
 
     /// Returns `true` if the generator declaration contains a direct call to `eval`.
@@ -145,6 +159,7 @@ pub struct GeneratorExpression {
 
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) scopes: FunctionScopes,
+    linear_span: LinearSpanIgnoreEq,
 }
 
 impl GeneratorExpression {
@@ -155,6 +170,7 @@ impl GeneratorExpression {
         name: Option<Identifier>,
         parameters: FormalParameterList,
         body: FunctionBody,
+        linear_span: LinearSpan,
         has_binding_identifier: bool,
     ) -> Self {
         let contains_direct_eval = contains(&parameters, ContainsSymbol::DirectEval)
@@ -167,6 +183,7 @@ impl GeneratorExpression {
             name_scope: None,
             contains_direct_eval,
             scopes: FunctionScopes::default(),
+            linear_span: linear_span.into(),
         }
     }
 
@@ -212,6 +229,13 @@ impl GeneratorExpression {
         &self.scopes
     }
 
+    /// Gets linear span of the function declaration.
+    #[inline]
+    #[must_use]
+    pub const fn linear_span(&self) -> LinearSpan {
+        self.linear_span.0
+    }
+
     /// Returns `true` if the generator expression contains a direct call to `eval`.
     #[inline]
     #[must_use]
@@ -225,14 +249,15 @@ impl ToIndentedString for GeneratorExpression {
         let mut buf = "function*".to_owned();
         if self.has_binding_identifier {
             if let Some(name) = self.name {
-                buf.push_str(&format!(" {}", interner.resolve_expect(name.sym())));
+                let _ = write!(buf, " {}", interner.resolve_expect(name.sym()));
             }
         }
-        buf.push_str(&format!(
+        let _ = write!(
+            buf,
             "({}) {}",
             join_nodes(interner, self.parameters.as_ref()),
             block_to_string(&self.body.statements, interner, indentation)
-        ));
+        );
 
         buf
     }

@@ -23,7 +23,7 @@ use crate::{
 use boa_gc::{Finalize, Trace};
 use boa_profiler::Profiler;
 use temporal_rs::{
-    options::{ArithmeticOverflow, TemporalRoundingMode, TemporalUnit, ToStringRoundingOptions},
+    options::{ArithmeticOverflow, RoundingMode, ToStringRoundingOptions, Unit},
     partial::PartialTime,
     PlainTime as PlainTimeInner,
 };
@@ -119,6 +119,7 @@ impl IntrinsicObject for PlainTime {
             .method(Self::round, js_string!("round"), 1)
             .method(Self::equals, js_string!("equals"), 1)
             .method(Self::to_string, js_string!("toString"), 0)
+            .method(Self::to_locale_string, js_string!("toLocaleString"), 0)
             .method(Self::to_json, js_string!("toJSON"), 0)
             .method(Self::value_of, js_string!("valueOf"), 0)
             .build();
@@ -484,7 +485,7 @@ impl PlainTime {
 
         // 8. Let roundingMode be ? ToTemporalRoundingMode(roundTo, "halfExpand").
         let rounding_mode =
-            get_option::<TemporalRoundingMode>(&round_to, js_string!("roundingMode"), context)?;
+            get_option::<RoundingMode>(&round_to, js_string!("roundingMode"), context)?;
 
         // 9. Let smallestUnit be ? GetTemporalUnit(roundTo, "smallestUnit", time, required).
         let smallest_unit = get_temporal_unit(
@@ -544,9 +545,8 @@ impl PlainTime {
 
         let precision = get_digits_option(&options, context)?;
         let rounding_mode =
-            get_option::<TemporalRoundingMode>(&options, js_string!("roundingMode"), context)?;
-        let smallest_unit =
-            get_option::<TemporalUnit>(&options, js_string!("smallestUnit"), context)?;
+            get_option::<RoundingMode>(&options, js_string!("roundingMode"), context)?;
+        let smallest_unit = get_option::<Unit>(&options, js_string!("smallestUnit"), context)?;
 
         let options = ToStringRoundingOptions {
             precision,
@@ -556,6 +556,22 @@ impl PlainTime {
 
         let ixdtf = time.inner.to_ixdtf_string(options)?;
 
+        Ok(JsString::from(ixdtf).into())
+    }
+
+    /// 4.3.17 `Temporal.PlainTime.prototype.toLocaleString ( [ locales [ , options ] ] )`
+    fn to_locale_string(this: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+        // TODO: Update for ECMA-402 compliance
+        let time = this
+            .as_object()
+            .and_then(JsObject::downcast_ref::<Self>)
+            .ok_or_else(|| {
+                JsNativeError::typ().with_message("the this object must be a PlainTime object.")
+            })?;
+
+        let ixdtf = time
+            .inner
+            .to_ixdtf_string(ToStringRoundingOptions::default())?;
         Ok(JsString::from(ixdtf).into())
     }
 
@@ -674,19 +690,9 @@ pub(crate) fn to_temporal_time(
 
             let options = get_options_object(options)?;
             let overflow =
-                get_option::<ArithmeticOverflow>(&options, js_string!("overflow"), context)?
-                    .unwrap_or(ArithmeticOverflow::Constrain);
+                get_option::<ArithmeticOverflow>(&options, js_string!("overflow"), context)?;
 
-            PlainTimeInner::new_with_overflow(
-                partial.hour.unwrap_or(0),
-                partial.minute.unwrap_or(0),
-                partial.second.unwrap_or(0),
-                partial.millisecond.unwrap_or(0),
-                partial.microsecond.unwrap_or(0),
-                partial.nanosecond.unwrap_or(0),
-                overflow,
-            )
-            .map_err(Into::into)
+            PlainTimeInner::from_partial(partial, overflow).map_err(Into::into)
         }
         // 3. Else,
         JsVariant::String(str) => {
@@ -715,35 +721,7 @@ pub(crate) fn to_partial_time_record(
             let finite = v.to_finitef64(context)?;
             Ok::<u8, JsError>(finite.as_integer_with_truncation::<u8>())
         })
-        .transpose()?
-        .map(Into::into);
-
-    let minute = partial_object
-        .get(js_string!("minute"), context)?
-        .map(|v| {
-            let finite = v.to_finitef64(context)?;
-            Ok::<u8, JsError>(finite.as_integer_with_truncation::<u8>())
-        })
-        .transpose()?
-        .map(Into::into);
-
-    let second = partial_object
-        .get(js_string!("second"), context)?
-        .map(|v| {
-            let finite = v.to_finitef64(context)?;
-            Ok::<u8, JsError>(finite.as_integer_with_truncation::<u8>())
-        })
-        .transpose()?
-        .map(Into::into);
-
-    let millisecond = partial_object
-        .get(js_string!("millisecond"), context)?
-        .map(|v| {
-            let finite = v.to_finitef64(context)?;
-            Ok::<u16, JsError>(finite.as_integer_with_truncation::<u16>())
-        })
-        .transpose()?
-        .map(Into::into);
+        .transpose()?;
 
     let microsecond = partial_object
         .get(js_string!("microsecond"), context)?
@@ -751,8 +729,23 @@ pub(crate) fn to_partial_time_record(
             let finite = v.to_finitef64(context)?;
             Ok::<u16, JsError>(finite.as_integer_with_truncation::<u16>())
         })
-        .transpose()?
-        .map(Into::into);
+        .transpose()?;
+
+    let millisecond = partial_object
+        .get(js_string!("millisecond"), context)?
+        .map(|v| {
+            let finite = v.to_finitef64(context)?;
+            Ok::<u16, JsError>(finite.as_integer_with_truncation::<u16>())
+        })
+        .transpose()?;
+
+    let minute = partial_object
+        .get(js_string!("minute"), context)?
+        .map(|v| {
+            let finite = v.to_finitef64(context)?;
+            Ok::<u8, JsError>(finite.as_integer_with_truncation::<u8>())
+        })
+        .transpose()?;
 
     let nanosecond = partial_object
         .get(js_string!("nanosecond"), context)?
@@ -760,8 +753,15 @@ pub(crate) fn to_partial_time_record(
             let finite = v.to_finitef64(context)?;
             Ok::<u16, JsError>(finite.as_integer_with_truncation::<u16>())
         })
-        .transpose()?
-        .map(Into::into);
+        .transpose()?;
+
+    let second = partial_object
+        .get(js_string!("second"), context)?
+        .map(|v| {
+            let finite = v.to_finitef64(context)?;
+            Ok::<u8, JsError>(finite.as_integer_with_truncation::<u8>())
+        })
+        .transpose()?;
 
     Ok(PartialTime {
         hour,

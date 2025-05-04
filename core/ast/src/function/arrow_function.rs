@@ -1,3 +1,4 @@
+use super::{FormalParameterList, FunctionBody};
 use crate::operations::{contains, ContainsSymbol};
 use crate::scope::FunctionScopes;
 use crate::visitor::{VisitWith, Visitor, VisitorMut};
@@ -5,10 +6,9 @@ use crate::{
     expression::{Expression, Identifier},
     join_nodes,
 };
+use crate::{LinearSpan, LinearSpanIgnoreEq};
 use boa_interner::{Interner, ToIndentedString};
-use core::ops::ControlFlow;
-
-use super::{FormalParameterList, FunctionBody};
+use core::{fmt::Write as _, ops::ControlFlow};
 
 /// An arrow function expression, as defined by the [spec].
 ///
@@ -30,6 +30,7 @@ pub struct ArrowFunction {
 
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) scopes: FunctionScopes,
+    linear_span: LinearSpanIgnoreEq,
 }
 
 impl ArrowFunction {
@@ -40,6 +41,7 @@ impl ArrowFunction {
         name: Option<Identifier>,
         parameters: FormalParameterList,
         body: FunctionBody,
+        linear_span: LinearSpan,
     ) -> Self {
         let contains_direct_eval = contains(&parameters, ContainsSymbol::DirectEval)
             || contains(&body, ContainsSymbol::DirectEval);
@@ -49,6 +51,7 @@ impl ArrowFunction {
             body,
             contains_direct_eval,
             scopes: FunctionScopes::default(),
+            linear_span: linear_span.into(),
         }
     }
 
@@ -86,6 +89,13 @@ impl ArrowFunction {
         &self.scopes
     }
 
+    /// Gets linear span of the function declaration.
+    #[inline]
+    #[must_use]
+    pub const fn linear_span(&self) -> LinearSpan {
+        self.linear_span.0
+    }
+
     /// Returns `true` if the arrow function contains a direct call to `eval`.
     #[inline]
     #[must_use]
@@ -100,11 +110,12 @@ impl ToIndentedString for ArrowFunction {
         if self.body().statements().is_empty() {
             buf.push_str(") => {}");
         } else {
-            buf.push_str(&format!(
+            let _ = write!(
+                buf,
                 ") => {{\n{}{}}}",
                 self.body.to_indented_string(interner, indentation + 1),
                 "    ".repeat(indentation)
-            ));
+            );
         }
         buf
     }

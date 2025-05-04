@@ -13,9 +13,10 @@ use crate::{
     property::{MethodDefinitionKind, PropertyName},
     scope::FunctionScopes,
     visitor::{VisitWith, Visitor, VisitorMut},
+    LinearPosition, LinearSpan, LinearSpanIgnoreEq,
 };
 use boa_interner::{Interner, Sym, ToIndentedString, ToInternedString};
-use core::ops::ControlFlow;
+use core::{fmt::Write as _, ops::ControlFlow};
 
 /// Objects in ECMAScript may be defined as an unordered collection of related data, of
 /// primitive or reference types, in the form of “key: value” pairs.
@@ -211,31 +212,39 @@ impl ToIndentedString for ObjectLiteral {
         let mut buf = "{\n".to_owned();
         let indentation = "    ".repeat(indent_n + 1);
         for property in &*self.properties {
-            buf.push_str(&match property {
+            match property {
                 PropertyDefinition::IdentifierReference(ident) => {
-                    format!("{indentation}{},\n", interner.resolve_expect(ident.sym()))
+                    let _ = writeln!(
+                        buf,
+                        "{indentation}{},",
+                        interner.resolve_expect(ident.sym())
+                    );
                 }
                 PropertyDefinition::Property(key, value) => {
-                    format!(
-                        "{indentation}{}: {},\n",
+                    let _ = writeln!(
+                        buf,
+                        "{indentation}{}: {},",
                         key.to_interned_string(interner),
                         value.to_no_indent_string(interner, indent_n + 1)
-                    )
+                    );
                 }
                 PropertyDefinition::SpreadObject(key) => {
-                    format!("{indentation}...{},\n", key.to_interned_string(interner))
+                    let _ = writeln!(buf, "{indentation}...{},", key.to_interned_string(interner));
                 }
-                PropertyDefinition::MethodDefinition(m) => m.to_indented_string(interner, indent_n),
+                PropertyDefinition::MethodDefinition(m) => {
+                    buf.push_str(&m.to_indented_string(interner, indent_n));
+                }
                 PropertyDefinition::CoverInitializedName(ident, expr) => {
-                    format!(
-                        "{indentation}{} = {},\n",
+                    let _ = writeln!(
+                        buf,
+                        "{indentation}{} = {},",
                         interner.resolve_expect(ident.sym()),
                         expr.to_no_indent_string(interner, indent_n + 1)
-                    )
+                    );
                 }
-            });
+            }
         }
-        buf.push_str(&format!("{}}}", "    ".repeat(indent_n)));
+        let _ = write!(buf, "{}}}", "    ".repeat(indent_n));
 
         buf
     }
@@ -410,6 +419,7 @@ pub struct ObjectMethodDefinition {
 
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) scopes: FunctionScopes,
+    linear_span: LinearSpanIgnoreEq,
 }
 
 impl ObjectMethodDefinition {
@@ -421,9 +431,12 @@ impl ObjectMethodDefinition {
         parameters: FormalParameterList,
         body: FunctionBody,
         kind: MethodDefinitionKind,
+        start_linear_pos: LinearPosition,
     ) -> Self {
         let contains_direct_eval = contains(&parameters, ContainsSymbol::DirectEval)
             || contains(&body, ContainsSymbol::DirectEval);
+        let linear_span = LinearSpan::new(start_linear_pos, body.linear_pos_end()).into();
+
         Self {
             name,
             parameters,
@@ -431,6 +444,7 @@ impl ObjectMethodDefinition {
             contains_direct_eval,
             kind,
             scopes: FunctionScopes::default(),
+            linear_span,
         }
     }
 
@@ -467,6 +481,13 @@ impl ObjectMethodDefinition {
     #[must_use]
     pub const fn scopes(&self) -> &FunctionScopes {
         &self.scopes
+    }
+
+    /// Gets linear span of the function declaration.
+    #[inline]
+    #[must_use]
+    pub const fn linear_span(&self) -> LinearSpan {
+        self.linear_span.0
     }
 
     /// Returns `true` if the object method definition contains a direct call to `eval`.

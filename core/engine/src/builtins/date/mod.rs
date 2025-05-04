@@ -18,10 +18,7 @@ use crate::{
         },
         BuiltInBuilder, BuiltInConstructor, BuiltInObject, IntrinsicObject,
     },
-    context::{
-        intrinsics::{Intrinsics, StandardConstructor, StandardConstructors},
-        HostHooks,
-    },
+    context::intrinsics::{Intrinsics, StandardConstructor, StandardConstructors},
     error::JsNativeError,
     js_string,
     object::{internal_methods::get_prototype_from_constructor, JsObject},
@@ -53,8 +50,8 @@ impl Date {
     }
 
     /// Creates a new `Date` from the current UTC time of the host.
-    pub(crate) fn utc_now(hooks: &dyn HostHooks) -> Self {
-        Self(hooks.utc_now() as f64)
+    pub(crate) fn utc_now(context: &mut Context) -> Self {
+        Self(context.clock().now().millis_since_epoch() as f64)
     }
 }
 
@@ -208,7 +205,7 @@ impl BuiltInConstructor for Date {
         // 1. If NewTarget is undefined, then
         if new_target.is_undefined() {
             // a. Let now be the time value (UTC) identifying the current time.
-            let now = context.host_hooks().utc_now();
+            let now = context.clock().now().millis_since_epoch();
 
             // b. Return ToDateString(now).
             return Ok(JsValue::from(to_date_string_t(
@@ -222,7 +219,7 @@ impl BuiltInConstructor for Date {
             // 3. If numberOfArgs = 0, then
             [] => {
                 // a. Let dv be the time value (UTC) identifying the current time.
-                Self::utc_now(context.host_hooks().as_ref())
+                Self::utc_now(context)
             }
             // 4. Else if numberOfArgs = 1, then
             // a. Let value be values[0].
@@ -326,7 +323,7 @@ impl Date {
     /// [mdn]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/now
     #[allow(clippy::unnecessary_wraps)]
     pub(crate) fn now(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-        Ok(JsValue::new(context.host_hooks().utc_now()))
+        Ok(JsValue::new(context.clock().now().millis_since_epoch()))
     }
 
     /// `Date.parse()`
@@ -425,7 +422,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::new(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return DateFromTime(LocalTime(t)).
@@ -464,7 +461,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return WeekDay(LocalTime(t)).
@@ -506,7 +503,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         // 5. Return YearFromTime(LocalTime(t)) - 1900𝔽.
         Ok(JsValue::from(
@@ -538,7 +535,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return YearFromTime(LocalTime(t)).
@@ -576,7 +573,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return HourFromTime(LocalTime(t)).
@@ -614,7 +611,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return msFromTime(LocalTime(t)).
@@ -652,7 +649,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return MinFromTime(LocalTime(t)).
@@ -691,7 +688,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return MonthFromTime(LocalTime(t)).
@@ -729,7 +726,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 5. Return SecFromTime(LocalTime(t)).
@@ -797,7 +794,7 @@ impl Date {
         // 4. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         // 5. Return (t - LocalTime(t)) / msPerMinute.
         Ok(JsValue::from(
@@ -840,7 +837,7 @@ impl Date {
         // 5. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 6. Set t to LocalTime(t).
@@ -1004,7 +1001,7 @@ impl Date {
         // 8. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 9. Set t to LocalTime(t).
@@ -1077,7 +1074,7 @@ impl Date {
         // 5. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 6. Set t to LocalTime(t).
@@ -1155,7 +1152,7 @@ impl Date {
         // 7. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         if LOCAL {
             // 8. Set t to LocalTime(t).
@@ -1229,7 +1226,7 @@ impl Date {
         // 6. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         // 7. Set t to LocalTime(t).
         if LOCAL {
@@ -1302,7 +1299,7 @@ impl Date {
         // 6. If t is NaN, return NaN.
         if t.is_nan() {
             return Ok(JsValue::from(f64::NAN));
-        };
+        }
 
         // 7. Set t to LocalTime(t).
         if LOCAL {
@@ -1479,7 +1476,7 @@ impl Date {
         // 4. If tv is NaN, return "Invalid Date".
         if tv.is_nan() {
             return Ok(js_string!("Invalid Date").into());
-        };
+        }
 
         // 5. Let t be LocalTime(tv).
         let t = local_time(tv, context.host_hooks().as_ref());

@@ -7,10 +7,10 @@ use crate::{
     property::{MethodDefinitionKind, PropertyName},
     scope::{FunctionScopes, Scope},
     visitor::{VisitWith, Visitor, VisitorMut},
-    Declaration,
+    Declaration, LinearPosition, LinearSpan, LinearSpanIgnoreEq,
 };
 use boa_interner::{Interner, Sym, ToIndentedString, ToInternedString};
-use core::ops::ControlFlow;
+use core::{fmt::Write as _, ops::ControlFlow};
 use std::hash::Hash;
 
 /// A class declaration.
@@ -93,10 +93,7 @@ impl ToIndentedString for ClassDeclaration {
     fn to_indented_string(&self, interner: &Interner, indent_n: usize) -> String {
         let mut buf = format!("class {}", interner.resolve_expect(self.name.sym()));
         if let Some(super_ref) = self.super_ref.as_ref() {
-            buf.push_str(&format!(
-                " extends {}",
-                super_ref.to_interned_string(interner)
-            ));
+            let _ = write!(buf, " extends {}", super_ref.to_interned_string(interner));
         }
         if self.elements.is_empty() && self.constructor().is_none() {
             buf.push_str(" {}");
@@ -105,11 +102,12 @@ impl ToIndentedString for ClassDeclaration {
         let indentation = "    ".repeat(indent_n + 1);
         buf.push_str(" {\n");
         if let Some(expr) = &self.constructor {
-            buf.push_str(&format!(
-                "{indentation}constructor({}) {}\n",
+            let _ = writeln!(
+                buf,
+                "{indentation}constructor({}) {}",
                 join_nodes(interner, expr.parameters().as_ref()),
                 block_to_string(&expr.body.statements, interner, indent_n + 1)
-            ));
+            );
         }
         for element in &self.elements {
             buf.push_str(&element.to_indented_string(interner, indent_n));
@@ -248,14 +246,11 @@ impl ToIndentedString for ClassExpression {
         let mut buf = "class".to_string();
         if self.name_scope.is_some() {
             if let Some(name) = self.name {
-                buf.push_str(&format!(" {}", interner.resolve_expect(name.sym())));
+                let _ = write!(buf, " {}", interner.resolve_expect(name.sym()));
             }
         }
         if let Some(super_ref) = self.super_ref.as_ref() {
-            buf.push_str(&format!(
-                " extends {}",
-                super_ref.to_interned_string(interner)
-            ));
+            let _ = write!(buf, " extends {}", super_ref.to_interned_string(interner));
         }
         if self.elements.is_empty() && self.constructor().is_none() {
             buf.push_str(" {}");
@@ -264,11 +259,12 @@ impl ToIndentedString for ClassExpression {
         let indentation = "    ".repeat(indent_n + 1);
         buf.push_str(" {\n");
         if let Some(expr) = &self.constructor {
-            buf.push_str(&format!(
-                "{indentation}constructor({}) {}\n",
+            let _ = writeln!(
+                buf,
+                "{indentation}constructor({}) {}",
                 join_nodes(interner, expr.parameters().as_ref()),
                 block_to_string(&expr.body.statements, interner, indent_n + 1)
-            ));
+            );
         }
         for element in &self.elements {
             buf.push_str(&element.to_indented_string(interner, indent_n));
@@ -690,6 +686,7 @@ pub struct ClassMethodDefinition {
 
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) scopes: FunctionScopes,
+    linear_span: LinearSpanIgnoreEq,
 }
 
 impl ClassMethodDefinition {
@@ -702,9 +699,13 @@ impl ClassMethodDefinition {
         body: FunctionBody,
         kind: MethodDefinitionKind,
         is_static: bool,
+        start_linear_pos: LinearPosition,
     ) -> Self {
         let contains_direct_eval = contains(&parameters, ContainsSymbol::DirectEval)
             || contains(&body, ContainsSymbol::DirectEval);
+
+        let linear_span = LinearSpan::new(start_linear_pos, body.linear_pos_end());
+
         Self {
             name,
             parameters,
@@ -713,6 +714,7 @@ impl ClassMethodDefinition {
             kind,
             is_static,
             scopes: FunctionScopes::default(),
+            linear_span: linear_span.into(),
         }
     }
 
@@ -763,6 +765,13 @@ impl ClassMethodDefinition {
     #[must_use]
     pub const fn scopes(&self) -> &FunctionScopes {
         &self.scopes
+    }
+
+    /// Gets linear span of the function declaration.
+    #[inline]
+    #[must_use]
+    pub const fn linear_span(&self) -> LinearSpan {
+        self.linear_span.0
     }
 
     /// Returns `true` if the class method definition contains a direct call to `eval`.

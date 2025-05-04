@@ -23,10 +23,7 @@ use crate::{
 use boa_gc::{Finalize, Trace};
 use boa_profiler::Profiler;
 use temporal_rs::{
-    options::{
-        RoundingIncrement, RoundingOptions, TemporalRoundingMode, TemporalUnit,
-        ToStringRoundingOptions,
-    },
+    options::{RoundingIncrement, RoundingMode, RoundingOptions, ToStringRoundingOptions, Unit},
     partial::PartialDuration,
     Duration as InnerDuration,
 };
@@ -186,6 +183,7 @@ impl IntrinsicObject for Duration {
                 Attribute::CONFIGURABLE,
             )
             .static_method(Self::from, js_string!("from"), 1)
+            .static_method(Self::compare, js_string!("compare"), 2)
             .method(Self::with, js_string!("with"), 1)
             .method(Self::negated, js_string!("negated"), 0)
             .method(Self::abs, js_string!("abs"), 0)
@@ -194,6 +192,7 @@ impl IntrinsicObject for Duration {
             .method(Self::round, js_string!("round"), 1)
             .method(Self::total, js_string!("total"), 1)
             .method(Self::to_string, js_string!("toString"), 0)
+            .method(Self::to_locale_string, js_string!("toLocaleString"), 0)
             .method(Self::to_json, js_string!("toJSON"), 0)
             .method(Self::value_of, js_string!("valueOf"), 0)
             .build();
@@ -458,6 +457,19 @@ impl Duration {
         create_temporal_duration(to_temporal_duration_record(item, context)?, None, context)
             .map(Into::into)
     }
+
+    fn compare(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+        // 1. Set one to ? ToTemporalDuration(one).
+        let one = to_temporal_duration(args.get_or_undefined(0), context)?;
+        // 2. Set two to ? ToTemporalDuration(two).
+        let two = to_temporal_duration(args.get_or_undefined(1), context)?;
+        // 3. Let resolvedOptions be ? GetOptionsObject(options).
+        let options = get_options_object(args.get_or_undefined(2))?;
+        // 4. Let relativeToRecord be ? GetTemporalRelativeToOption(resolvedOptions).
+        let relative_to = get_relative_to_option(&options, context)?;
+
+        Ok((one.compare_with_provider(&two, relative_to, context.tz_provider())? as i8).into())
+    }
 }
 
 // ==== Duration.prototype method implementations ====
@@ -709,7 +721,7 @@ impl Duration {
             &round_to,
             js_string!("largestUnit"),
             TemporalUnitGroup::DateTime,
-            Some([TemporalUnit::Auto].into()),
+            Some([Unit::Auto].into()),
             context,
         )?;
 
@@ -724,7 +736,7 @@ impl Duration {
 
         // 14. Let roundingMode be ? ToTemporalRoundingMode(roundTo, "halfExpand").
         options.rounding_mode =
-            get_option::<TemporalRoundingMode>(&round_to, js_string!("roundingMode"), context)?;
+            get_option::<RoundingMode>(&round_to, js_string!("roundingMode"), context)?;
 
         // 15. Let smallestUnit be ? GetTemporalUnit(roundTo, "smallestUnit", datetime, undefined).
         options.smallest_unit = get_temporal_unit(
@@ -753,7 +765,7 @@ impl Duration {
     ) -> JsResult<JsValue> {
         // 1. Let duration be the this value.
         // 2. Perform ? RequireInternalSlot(duration, [[InitializedTemporalDuration]]).
-        let _duration = this
+        let duration = this
             .as_object()
             .and_then(JsObject::downcast_ref::<Self>)
             .ok_or_else(|| {
@@ -793,11 +805,10 @@ impl Duration {
         // 7. Let relativeToRecord be ? ToRelativeTemporalObject(totalOf).
         // 8. Let zonedRelativeTo be relativeToRecord.[[ZonedRelativeTo]].
         // 9. Let plainRelativeTo be relativeToRecord.[[PlainRelativeTo]].
-        let (_plain_relative_to, _zoned_relative_to) =
-            super::to_relative_temporal_object(&total_of, context)?;
+        let relative_to = get_relative_to_option(&total_of, context)?;
 
         // 10. Let unit be ? GetTemporalUnit(totalOf, "unit", datetime, required).
-        let _unit = get_temporal_unit(
+        let unit = get_temporal_unit(
             &total_of,
             js_string!("unit"),
             TemporalUnitGroup::DateTime,
@@ -806,10 +817,10 @@ impl Duration {
         )?
         .ok_or_else(|| JsNativeError::range().with_message("unit cannot be undefined."))?;
 
-        // TODO: Implement the rest of the new `Temporal.Duration.prototype.total`
-
-        Err(JsNativeError::error()
-            .with_message("not yet implemented.")
+        Ok(duration
+            .inner
+            .total_with_provider(unit, relative_to, context.tz_provider())?
+            .as_inner()
             .into())
     }
 
@@ -829,11 +840,10 @@ impl Duration {
         let options = get_options_object(args.get_or_undefined(0))?;
         let precision = get_digits_option(&options, context)?;
         let rounding_mode =
-            get_option::<TemporalRoundingMode>(&options, js_string!("roundingMode"), context)?;
-        let smallest_unit =
-            get_option::<TemporalUnit>(&options, js_string!("smallestUnit"), context)?;
+            get_option::<RoundingMode>(&options, js_string!("roundingMode"), context)?;
+        let smallest_unit = get_option::<Unit>(&options, js_string!("smallestUnit"), context)?;
 
-        let result = duration.inner.to_temporal_string(ToStringRoundingOptions {
+        let result = duration.inner.as_temporal_string(ToStringRoundingOptions {
             precision,
             smallest_unit,
             rounding_mode,
@@ -853,11 +863,34 @@ impl Duration {
 
         let result = duration
             .inner
-            .to_temporal_string(ToStringRoundingOptions::default())?;
+            .as_temporal_string(ToStringRoundingOptions::default())?;
 
         Ok(JsString::from(result).into())
     }
 
+    // TODO: Potentially update docs if localeString is inverted.
+    /// 7.3.24 `Temporal.Duration.prototype.toLocaleString ( )`
+    pub(crate) fn to_locale_string(
+        this: &JsValue,
+        _: &[JsValue],
+        _: &mut Context,
+    ) -> JsResult<JsValue> {
+        // TODO: Update for ECMA-402 compliance
+        let duration = this
+            .as_object()
+            .and_then(JsObject::downcast_ref::<Self>)
+            .ok_or_else(|| {
+                JsNativeError::typ().with_message("this value must be a Duration object.")
+            })?;
+
+        let result = duration
+            .inner
+            .as_temporal_string(ToStringRoundingOptions::default())?;
+
+        Ok(JsString::from(result).into())
+    }
+
+    /// 7.3.25 `Temporal.Duration.prototype.valueOf ( )`
     pub(crate) fn value_of(_this: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
         Err(JsNativeError::typ()
             .with_message("`valueOf` not supported by Temporal built-ins. See 'compare', 'equals', or `toString`")
